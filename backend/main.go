@@ -1,293 +1,108 @@
 package main
 
 import (
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
-	"strings"
 	"time"
-
-	"github.com/joho/godotenv"
-
-	"gopkg.in/freeeve/pgn.v1"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const insertBatchSize = 5000
-
-type ArchivesData struct {
-	Archives []string `json:"archives"`
-}
-
-type GamePlayer struct {
-	Id       string `json:"uuid"`
-	Url      string `json:"@id"`
+type SetupReqBody struct {
 	Username string `json:"username"`
-	Result   string `json:"result"`
-	Rating   uint16 `json:"rating"`
 }
 
-type Game struct {
-	Id          string     `json:"uuid"`
-	Url         string     `json:"url"`
-	Pgn         string     `json:"pgn"`
-	TimeControl string     `json:"time_control"`
-	EndTime     uint32     `json:"end_time"`
-	IsRated     bool       `json:"rated"`
-	TimeClass   string     `json:"time_class"`
-	WhitePlayer GamePlayer `json:"white"`
-	BlackPlayer GamePlayer `json:"black"`
+type SetupResp struct {
+	Id     string `json:"id"`
+	Status string `json:"status"`
 }
 
-type Archive struct {
-	Games []Game `json:"games"`
-}
+var pendingSetupRequests = make(map[string]string)
 
-func listArchives(user string) []string {
-	url := fmt.Sprintf("http://api.chess.com/pub/player/%s/games/archives", user)
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
+func setup(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
 
-	var data ArchivesData
-	if err := json.Unmarshal(body, &data); err != nil {
-		panic(err)
+	var body SetupReqBody
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	return data.Archives
-}
-
-func getArchive(url string) []Game {
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
+	if body.Username == "" {
+		http.Error(w, "Username required", http.StatusBadRequest)
 	}
 
-	var data Archive
-	if err := json.Unmarshal(body, &data); err != nil {
-		panic(err)
+	requestId := hash(body.Username)
+	if pendingSetupRequests[requestId] != "" {
+		json.NewEncoder(w).Encode(SetupResp{
+			Id:     requestId,
+			Status: pendingSetupRequests[requestId],
+		})
+		return
 	}
 
-	return data.Games
-}
-
-func createTables(db *sql.DB) {
-	createGamesTable := `
-	CREATE TABLE IF NOT EXISTS games (
-		id TEXT PRIMARY KEY,
-		url VARCHAR(255) NOT NULL,
-		time_class VARCHAR(20) NOT NULL,
-		time_control VARCHAR(25) NOT NULL,
-		white_player VARCHAR(50) NOT NULL,
-		black_player VARCHAR(50) NOT NULL,
-		white_rating INTEGER NOT NULL,
-		black_rating INTEGER NOT NULL,
-		winner VARCHAR(50),
-		result VARCHAR(25) NOT NULL
-	)
-	`
-
-	createPositionsTable := `
-	CREATE TABLE IF NOT EXISTS positions (
-		id TEXT PRIMARY KEY,
-		fen TEXT NOT NULL,
-		game_id TEXT NOT NULL
-	)
-	`
-
-	if _, err := db.Exec(createGamesTable); err != nil {
-		fmt.Println("Error creating games table")
-		panic(err)
-	}
-	if _, err := db.Exec(createPositionsTable); err != nil {
-		fmt.Println("Error creating positions table")
-		panic(err)
-	}
-}
-
-func insertGame(tx *sql.Tx, stmt *sql.Stmt, game Game) {
-	var winner interface{} = nil
-	result := game.WhitePlayer.Result
-	if game.WhitePlayer.Result == "win" {
-		winner = game.WhitePlayer.Username
-		result = game.BlackPlayer.Result
-	} else if game.BlackPlayer.Result == "win" {
-		winner = game.BlackPlayer.Username
-		result = game.WhitePlayer.Result
+	dbFilename := fmt.Sprintf("./%s.db", requestId)
+	if _, err := os.Stat(dbFilename); !os.IsNotExist(err) {
+		json.NewEncoder(w).Encode(SetupResp{
+			Id:     requestId,
+			Status: "Complete",
+		})
+		return
 	}
 
-	_, err := tx.Stmt(stmt).Exec(
-		game.Id,
-		game.Url,
-		game.TimeClass,
-		game.TimeControl,
-		game.WhitePlayer.Username,
-		game.BlackPlayer.Username,
-		game.WhitePlayer.Rating,
-		game.BlackPlayer.Rating,
-		winner,
-		result,
-	)
-	if err != nil {
-		fmt.Printf("Insert game error\n")
-		panic(err)
-	}
-}
+	pendingSetupRequests[requestId] = "Started"
+	json.NewEncoder(w).Encode(SetupResp{
+		Id:     requestId,
+		Status: "Started",
+	})
 
-func insertFens(tx *sql.Tx, stmt *sql.Stmt, pgnStr string, gameId string) {
-	ps := pgn.NewPGNScanner(strings.NewReader(pgnStr))
-	for ps.Next() {
-		game, err := ps.Scan()
+	go func() {
+		setupStart := time.Now()
+
+		db, err := sql.Open("sqlite3", dbFilename)
 		if err != nil {
-			fmt.Printf("Pgn error\n")
-			fmt.Println(err)
-			continue
+			fmt.Println("Error opening db")
+			panic(err)
 		}
+		defer db.Close()
 
-		b := pgn.NewBoard()
-		for _, move := range game.Moves {
-			b.MakeMove(move)
-			fenParts := strings.Split(b.String(), " ")
-			fenStr := strings.Join(fenParts[:len(fenParts)-2], " ")
+		createTables(db)
 
-			hash := sha256.New()
-			hash.Write([]byte(fenStr))
-			hash.Write([]byte(gameId))
+		fmt.Println("User data request started:")
+		requestGamesStart := time.Now()
+		allGames := getAllGames(body.Username)
+		duration := time.Since(requestGamesStart)
+		fmt.Printf("%d games received in %v!\n", len(allGames), duration)
 
-			if _, err := tx.Stmt(stmt).Exec(hash.Sum(nil), fenStr, gameId); err != nil {
-				fmt.Println("Fen insert error")
-				panic(err)
-			}
+		fmt.Println("Inserting into db started:")
+		insertStart := time.Now()
+		insertStats, err := insertUserData(db, allGames)
+		if err != nil {
+			fmt.Println("Critical failure occurred while inserting into db")
+			panic(err)
 		}
-	}
-}
+		duration = time.Since(insertStart)
+		fmt.Printf("Inserted user data in %v\n", duration)
+		fmt.Printf("  %d games inserted\n", insertStats.numGamesInserted)
+		fmt.Printf("  %d games failed to insert\n", insertStats.numGameInsertErrors)
+		fmt.Printf("  %d positions inserted\n", insertStats.numPositionsInserted)
+		fmt.Printf("  %d positions failed to insert\n", insertStats.numPositionInsertErrors)
 
-func insertUserData(db *sql.DB, allGames []Game) {
-	start := time.Now()
-
-	tx, err := db.Begin()
-	if err != nil {
-		panic(err)
-	}
-
-	gameInsertStmt, err := db.Prepare(`
-	INSERT OR IGNORE INTO games (
-		id, 
-		url, 
-		time_class, 
-		time_control, 
-		white_player, 
-		black_player, 
-		white_rating,
-		black_rating,
-		winner,
-		result
-	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		panic(err)
-	}
-	defer gameInsertStmt.Close()
-	fenInsertStmt, err := db.Prepare("INSERT OR IGNORE INTO positions (id, fen, game_id) VALUES(?, ?, ?)")
-	if err != nil {
-		panic(err)
-	}
-	defer fenInsertStmt.Close()
-
-	for i, game := range allGames {
-		fmt.Printf("%d / %d\n", i+1, len(allGames))
-		insertGame(tx, gameInsertStmt, game)
-		insertFens(tx, fenInsertStmt, game.Pgn, game.Id)
-
-		if i%insertBatchSize == 0 {
-			if err := tx.Commit(); err != nil {
-				panic(err)
-			}
-
-			tx, err = db.Begin()
-			if err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		panic(err)
-	}
-
-	createPositionsIndex := `
-	CREATE INDEX IF NOT EXISTS fen_idx ON positions(fen)
-	`
-	if _, err := db.Exec(createPositionsIndex); err != nil {
-		fmt.Println("Error creating positions index")
-		panic(err)
-	}
-
-	duration := time.Since(start)
-	fmt.Printf("Inserted user data in %v\n", duration)
+		fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
+	}()
 }
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		panic(err)
-	}
+	http.HandleFunc("/setup", setup)
 
-	db, err := sql.Open("sqlite3", "./database.db")
-	if err != nil {
-		panic(err)
-	}
-	defer db.Close()
-
-	createTables(db)
-
-	user := os.Getenv("USERNAME")
-	archives := listArchives(user)
-
-	allGames := []Game{}
-	for _, archive := range archives {
-		games := getArchive(archive)
-		allGames = append(allGames, games...)
-	}
-	fmt.Printf("# games: %d\n", len(allGames))
-
-	insertUserData(db, allGames)
-
-	// rows, err := db.Query(`
-	// SELECT fen, count(*)
-	// FROM positions
-	// GROUP BY fen
-	// HAVING count(*) > 1
-	// ORDER BY count(*)
-	// `)
-	// if err != nil {
-	// 	fmt.Printf("Query error\n")
-	// 	panic(err)
-	// }
-	// defer rows.Close()
-
-	// for i := 0; rows.Next() && i < 20; i++ {
-	// 	var fen string
-	// 	var count int
-	// 	if err := rows.Scan(&fen, &count); err != nil {
-	// 		panic(err)
-	// 	}
-
-	// 	fmt.Printf("Fen: %s, Count: %d\n", fen, count)
-	// }
+	const host = "localhost"
+	const port = ":8090"
+	fmt.Printf("Listening on %s%s...\n", host, port)
+	http.ListenAndServe(port, nil)
 }
