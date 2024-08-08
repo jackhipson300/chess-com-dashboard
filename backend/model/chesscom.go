@@ -1,4 +1,4 @@
-package main
+package model
 
 import (
 	"encoding/json"
@@ -85,7 +85,7 @@ func getArchive(url string, wg *sync.WaitGroup, ch chan<- []Game) {
 	ch <- data.Games
 }
 
-func getAllGames(user string) []Game {
+func GetAllGames(user string) []Game {
 	fmt.Println("Requesting list of archives...")
 	archives := listArchives(user)
 	var wg sync.WaitGroup

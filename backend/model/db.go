@@ -1,4 +1,4 @@
-package main
+package model
 
 import (
 	"crypto/sha256"
@@ -12,13 +12,13 @@ import (
 const insertBatchSize = 5000
 
 type InsertStatistics struct {
-	numGamesInserted        int
-	numPositionsInserted    int
-	numGameInsertErrors     int
-	numPositionInsertErrors int
+	NumGamesInserted        int
+	NumPositionsInserted    int
+	NumGameInsertErrors     int
+	NumPositionInsertErrors int
 }
 
-func createTables(db *sql.DB) {
+func CreateTables(db *sql.DB) {
 	createGamesTable := `
 	CREATE TABLE IF NOT EXISTS games (
 		id TEXT PRIMARY KEY,
@@ -118,7 +118,7 @@ func insertFens(tx *sql.Tx, stmt *sql.Stmt, pgnStr string, gameId string) (int, 
 	return numPositionsInserted, numPositionInsertErrors
 }
 
-func insertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
+func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 	numGamesInserted := 0
 	numPositionsInserted := 0
 	numGameInsertErrors := 0
