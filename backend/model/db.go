@@ -180,7 +180,7 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 			}
 		}
 	}
-	fmt.Println()
+
 	if err := tx.Commit(); err != nil {
 		return InsertStatistics{}, fmt.Errorf("error committing final transaction: %w", err)
 	}
@@ -194,9 +194,9 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 	}
 
 	return InsertStatistics{
-		numGamesInserted,
-		numGameInsertErrors,
-		numPositionsInserted,
-		numPositionInsertErrors,
+    NumGamesInserted: numGamesInserted,
+    NumGameInsertErrors: numGameInsertErrors,
+    NumPositionsInserted: numPositionsInserted,
+    NumPositionInsertErrors: numPositionInsertErrors,
 	}, nil
 }

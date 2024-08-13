@@ -14,11 +14,11 @@ type GameStats struct {
 	NumDraws  int `json:"draws"`
 }
 
-type GetGameStatsResponse struct {
-	Classical GameStats `json:"classical"`
-	Rapid     GameStats `json:"rapid"`
-	Blitz     GameStats `json:"blitz"`
-	Bullet    GameStats `json:"bullet"`
+type WinStats struct {
+  NumResigns int `json:"resigns"`
+  NumCheckmates int `json:"checkmates"`
+  NumAbandons int `json:"abandons"`
+  NumTimeouts int `json:"timeouts"`
 }
 
 func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
@@ -105,7 +105,7 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 	}
 }
 
-func GetWinStats(w http.ResponseWriter, req *http.Request) {
+func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 	if !req.URL.Query().Has("username") {
 		http.Error(w, "Username required", http.StatusBadRequest)
 		return
@@ -116,6 +116,86 @@ func GetWinStats(w http.ResponseWriter, req *http.Request) {
 		fmt.Printf("Error getting win stats for user \"%s\": %s\n", username, err)
 		return
 	}
+
+  queryStr := `
+  SELECT
+    tc.time_class,
+    COALESCE(r.resigns, 0) as resigns,
+    COALESCE(c.checkmates, 0) as checkmates,
+    COALESCE(a.abandons, 0) as abandons,
+    COALESCE(t.timeouts, 0) as timeouts
+  FROM (
+    SELECT DISTINCT time_class
+    FROM games
+  ) tc
+  LEFT JOIN (
+    SELECT time_class, count(*) as resigns 
+    FROM games
+    WHERE winner = $1 AND result = 'resigned'
+    GROUP BY time_class
+  ) r ON tc.time_class = r.time_class 
+  LEFT JOIN (
+    SELECT time_class, count(*) as checkmates
+    FROM games
+    WHERE winner = $1 AND result = 'checkmated' 
+    GROUP BY time_class 
+  ) c ON tc.time_class = c.time_class 
+  LEFT JOIN (
+    SELECT time_class, count(*) as abandons
+    FROM games 
+    WHERE winner = $1 AND result = 'abandoned'
+    GROUP BY time_class
+  ) a ON tc.time_class = a.time_class
+  LEFT JOIN (
+    SELECT time_class, count(*) as timeouts 
+    FROM games 
+    WHERE winner = $1 AND result = 'timeout' 
+    GROUP BY time_class
+  ) t ON tc.time_class = t.time_class
+  `
+
+	db := state.DBMap[utils.Hash(username)]
+	if db == nil {
+		fmt.Println("Error making win stats query: db not found")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query(queryStr, username)
+	if err != nil {
+		fmt.Printf("Error making win stats query: %s\n", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+    
+  response := make(map[string]WinStats)
+  for rows.Next() {
+    var timeClass string 
+    var resigns int 
+    var checkmates int 
+    var abandons int 
+    var timeouts int 
+
+    if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
+      fmt.Printf("Error parsing win stats query result: %s\n", err)
+      http.Error(w, "Internal server error", http.StatusInternalServerError)
+      return
+    }
+
+    response[timeClass] = WinStats{
+      NumResigns: resigns,
+      NumCheckmates: checkmates,
+      NumAbandons: abandons,
+      NumTimeouts: timeouts,
+    }
+  }
+
+  if err := json.NewEncoder(w).Encode(response); err != nil {
+    fmt.Printf("Error encoding win stats query result: %s\n", err)
+    http.Error(w, "Internal server error", http.StatusInternalServerError)
+    return
+  }
 }
 
 func GetLossStats(w http.ResponseWriter, req *http.Request) {
