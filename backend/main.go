@@ -38,6 +38,8 @@ func main() {
 	http.HandleFunc("/setup", api.MakeHandler(&state, api.Setup))
 	http.HandleFunc("/gamestats", api.MakeHandler(&state, api.GetGameStats))
   http.HandleFunc("/winstats", api.MakeHandler(&state, api.GetWinStats))
+  http.HandleFunc("/lossstats", api.MakeHandler(&state, api.GetLossStats))
+  http.HandleFunc("/drawstats", api.MakeHandler(&state, api.GetDrawStats))
 
 	const host = "localhost"
 	const port = ":8090"
