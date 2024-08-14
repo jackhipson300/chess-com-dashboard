@@ -3,9 +3,11 @@ package main
 import (
 	"backend/api"
 	"backend/types"
+  "backend/model"
 	"database/sql"
 	"fmt"
 	"net/http"
+  "os"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -26,6 +28,12 @@ func main() {
 		DBMap: make(map[string]*sql.DB),
 	}
 	defer cleanup(&state)
+
+  if err := model.LoadExistingDbs(&state); err != nil {
+    fmt.Printf("Fatal error: %w\n")
+    cleanup(&state)
+    os.Exit(0)
+  }
 
 	http.HandleFunc("/setup", api.MakeHandler(&state, api.Setup))
 	http.HandleFunc("/gamestats", api.MakeHandler(&state, api.GetGameStats))

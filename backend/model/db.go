@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+  "backend/types"
+  "os"
+  "path/filepath"
 
 	"gopkg.in/freeeve/pgn.v1"
 )
@@ -199,4 +202,29 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
     NumPositionsInserted: numPositionsInserted,
     NumPositionInsertErrors: numPositionInsertErrors,
 	}, nil
+}
+
+func LoadExistingDbs(state *types.ServerState) error {
+  cwd, err := os.Getwd()
+  if err != nil {
+    return fmt.Errorf("error loading existing dbs: %w", err)
+  }
+
+  pattern := filepath.Join(cwd, "*.db")
+  existingDbs, err := filepath.Glob(pattern)
+  if err != nil {
+    return fmt.Errorf("error loading existing dbs: %w", err)
+  }
+
+  for _, filename := range existingDbs {
+    filenameParts := strings.Split(filename, "/")
+    relativeFilename := filenameParts[len(filenameParts)-1]
+    db, err := sql.Open("sqlite3", relativeFilename)
+    if err != nil {
+      return fmt.Errorf("error loading existing dbs: %w", err)
+    }
+    state.DBMap[relativeFilename[0:len(relativeFilename)-3]] = db
+  }
+
+  return nil
 }

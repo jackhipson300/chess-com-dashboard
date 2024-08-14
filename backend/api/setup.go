@@ -34,7 +34,7 @@ func isSetup(username string) bool {
 
 func isSetupInProgress(username string) bool {
 	requestId := utils.Hash(username)
-	return setupRequests[requestId] != "Started"
+	return setupRequests[requestId] == "Started"
 }
 
 func performSetupCheck(w http.ResponseWriter, username string) error {

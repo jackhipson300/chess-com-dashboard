@@ -36,31 +36,15 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 	queryStr := `
 	SELECT 
 		tc.time_class, 
-		COALESCE(w.wins, 0) as wins, 
-		COALESCE(l.losses, 0) as losses,
-		COALESCE(d.draws, 0) as draws 
+		COALESCE(SUM(CASE WHEN g.winner = $1 THEN 1 ELSE NULL END), 0) as wins, 
+		COALESCE(SUM(CASE WHEN g.winner IS NOT NULL AND g.winner != $1 THEN 1 ELSE NULL END), 0) as losses,
+		COALESCE(SUM(CASE WHEN g.winner IS NULL THEN 1 ELSE NULL END), 0) as draws 
 	FROM (
 		SELECT DISTINCT time_class
 		FROM games
 	) tc
-	LEFT JOIN (
-		SELECT time_class, count(*) as wins
-		FROM games 
-		WHERE winner = $1
-		GROUP BY time_class
-	) w ON tc.time_class = w.time_class
-	LEFT JOIN (
-		SELECT time_class, count(*) as losses 
-		FROM games 
-		WHERE winner IS NOT NULL AND winner != $1 
-		GROUP BY time_class
-	) l ON tc.time_class = l.time_class
-	LEFT JOIN (
-		SELECT time_class, count(*) as draws 
-		FROM games 
-		WHERE winner IS NULL 
-		GROUP BY time_class 
-	) d ON tc.time_class = d.time_class
+  LEFT JOIN games g ON tc.time_class = g.time_class
+  GROUP BY tc.time_class
 	`
 
 	db := state.DBMap[utils.Hash(username)]
@@ -120,38 +104,16 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
   queryStr := `
   SELECT
     tc.time_class,
-    COALESCE(r.resigns, 0) as resigns,
-    COALESCE(c.checkmates, 0) as checkmates,
-    COALESCE(a.abandons, 0) as abandons,
-    COALESCE(t.timeouts, 0) as timeouts
+    COALESCE(SUM(CASE WHEN g.result = 'resigned' THEN 1 ELSE NULL END), 0) as resigns,
+    COALESCE(SUM(CASE WHEN g.result = 'checkmated' THEN 1 ELSE NULL END), 0) as checkmates,
+    COALESCE(SUM(CASE WHEN g.result = 'abandoned' THEN 1 ELSE NULL END), 0) as abandons,
+    COALESCE(SUM(CASE WHEN g.result = 'timeout' THEN 1 ELSE NULL END), 0) as timeouts
   FROM (
-    SELECT DISTINCT time_class
-    FROM games
-  ) tc
-  LEFT JOIN (
-    SELECT time_class, count(*) as resigns 
-    FROM games
-    WHERE winner = $1 AND result = 'resigned'
-    GROUP BY time_class
-  ) r ON tc.time_class = r.time_class 
-  LEFT JOIN (
-    SELECT time_class, count(*) as checkmates
-    FROM games
-    WHERE winner = $1 AND result = 'checkmated' 
-    GROUP BY time_class 
-  ) c ON tc.time_class = c.time_class 
-  LEFT JOIN (
-    SELECT time_class, count(*) as abandons
-    FROM games 
-    WHERE winner = $1 AND result = 'abandoned'
-    GROUP BY time_class
-  ) a ON tc.time_class = a.time_class
-  LEFT JOIN (
-    SELECT time_class, count(*) as timeouts 
-    FROM games 
-    WHERE winner = $1 AND result = 'timeout' 
-    GROUP BY time_class
-  ) t ON tc.time_class = t.time_class
+    SELECT DISTINCT time_class FROM games
+  ) tc 
+  LEFT JOIN
+    games g ON tc.time_class = g.time_class AND g.winner = $1
+  GROUP BY tc.time_class
   `
 
 	db := state.DBMap[utils.Hash(username)]
