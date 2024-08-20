@@ -26,11 +26,12 @@ func cleanup(state *types.ServerState) {
 func main() {
 	state := types.ServerState{
 		DBMap: make(map[string]*sql.DB),
+    SetupRequests: make(map[string]string),
 	}
 	defer cleanup(&state)
 
   if err := model.LoadExistingDbs(&state); err != nil {
-    fmt.Printf("Fatal error: %w\n")
+    fmt.Printf("Fatal error: %s\n", err)
     cleanup(&state)
     os.Exit(0)
   }

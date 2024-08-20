@@ -22,8 +22,6 @@ type SetupResp struct {
 	Status string `json:"status"`
 }
 
-var setupRequests = make(map[string]string)
-
 func isSetup(username string) bool {
 	dbFilename := fmt.Sprintf("%s.db", utils.Hash(username))
 	if _, err := os.Stat(dbFilename); !os.IsNotExist(err) {
@@ -32,13 +30,13 @@ func isSetup(username string) bool {
 	return false
 }
 
-func isSetupInProgress(username string) bool {
+func isSetupInProgress(setupRequests *map[string]string, username string) bool {
 	requestId := utils.Hash(username)
-	return setupRequests[requestId] == "Started"
+	return (*setupRequests)[requestId] == "Started"
 }
 
-func performSetupCheck(w http.ResponseWriter, username string) error {
-	if isSetupInProgress(username) {
+func performSetupCheck(w http.ResponseWriter, setupRequests *map[string]string, username string) error {
+	if isSetupInProgress(setupRequests, username) {
 		http.Error(w, "User data setup in progress", http.StatusBadRequest)
 		return errors.New("user data setup in progress")
 	}
@@ -68,15 +66,15 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 	}
 
 	requestId := utils.Hash(body.Username)
-	if setupRequests[requestId] != "" {
+	if state.SetupRequests[requestId] != "" {
 		json.NewEncoder(w).Encode(SetupResp{
 			Id:     requestId,
-			Status: setupRequests[requestId],
+			Status: state.SetupRequests[requestId],
 		})
 		return
 	}
 
-	setupRequests[requestId] = "Started"
+	state.SetupRequests[requestId] = "Started"
 	json.NewEncoder(w).Encode(SetupResp{
 		Id:     requestId,
 		Status: "Started",
@@ -89,7 +87,7 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 		db, err := sql.Open("sqlite3", dbFilename)
 		if err != nil {
 			fmt.Println("Error opening db")
-			setupRequests[requestId] = "Failed"
+			state.SetupRequests[requestId] = "Failed"
 			return
 		}
 		state.DBMap[requestId] = db
@@ -107,7 +105,7 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 		insertStats, err := model.InsertUserData(db, allGames)
 		if err != nil {
 			fmt.Println("Critical failure occurred while inserting into db")
-			setupRequests[requestId] = "Failed"
+			state.SetupRequests[requestId] = "Failed"
 			return
 		}
 
@@ -119,5 +117,7 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 		fmt.Printf("  %d positions failed to insert\n", insertStats.NumPositionInsertErrors)
 
 		fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
+
+    state.SetupRequests[requestId] = "Complete"
 	}()
 }

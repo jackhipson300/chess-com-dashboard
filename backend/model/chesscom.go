@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"sync"
+
+	"gopkg.in/freeeve/pgn.v1"
 )
 
 type ArchivesData struct {
@@ -20,7 +23,7 @@ type GamePlayer struct {
 	Rating   uint16 `json:"rating"`
 }
 
-type Game struct {
+type RawGame struct {
 	Id          string     `json:"uuid"`
 	Url         string     `json:"url"`
 	Pgn         string     `json:"pgn"`
@@ -32,8 +35,13 @@ type Game struct {
 	BlackPlayer GamePlayer `json:"black"`
 }
 
+type Game struct {
+  RawGame
+  Fens []string
+}
+
 type Archive struct {
-	Games []Game `json:"games"`
+	Games []RawGame `json:"games"`
 }
 
 func listArchives(user string) []string {
@@ -82,7 +90,43 @@ func getArchive(url string, wg *sync.WaitGroup, ch chan<- []Game) {
 		panic(err)
 	}
 
-	ch <- data.Games
+  var games []Game
+  for _, game := range data.Games {
+    games = append(games, parseGame(&game)) 
+  }
+
+	ch <- games
+}
+
+func parseGame(rawGame *RawGame) Game {
+  var fens []string
+  
+  // variants tend to break pgn parser
+  if !strings.Contains(rawGame.Pgn, "[Variant \"") {
+    ps := pgn.NewPGNScanner(strings.NewReader(rawGame.Pgn))
+    for ps.Next() {
+      game, err := ps.Scan()
+      if err != nil {
+        continue
+      }
+
+      b := pgn.NewBoard()
+      for _, move := range game.Moves {
+        if err := b.MakeMove(move); err != nil {
+          continue
+        }
+        fenParts := strings.Split(b.String(), " ")
+        fenStr := strings.Join(fenParts[:len(fenParts)-2], " ")
+
+        fens = append(fens, fenStr)
+      }
+    }
+  }
+
+  return Game{
+    RawGame: *rawGame,
+    Fens: fens,
+  }
 }
 
 func GetAllGames(user string) []Game {
@@ -91,19 +135,19 @@ func GetAllGames(user string) []Game {
 	var wg sync.WaitGroup
 
 	fmt.Println("Requesting individual archives...")
-	games_ch := make(chan []Game, len(archives))
+	gamesCh := make(chan []Game, len(archives))
 	for _, archive := range archives {
 		wg.Add(1)
-		go getArchive(archive, &wg, games_ch)
+		go getArchive(archive, &wg, gamesCh)
 	}
 
 	wg.Wait()
-	close(games_ch)
+	close(gamesCh)
 
-	fmt.Println("Receiving individual archives...")
-	allGames := []Game{}
-	for games := range games_ch {
-		allGames = append(allGames, games...)
+	fmt.Println("Parsing pgns...")
+  var allGames []Game
+	for games := range gamesCh {
+    allGames = append(allGames, games...)
 	}
 
 	return allGames

@@ -37,7 +37,7 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 	}
 	username := req.URL.Query().Get("username")
 
-	if err := performSetupCheck(w, username); err != nil {
+	if err := performSetupCheck(w, &state.SetupRequests, username); err != nil {
 		fmt.Printf("Error getting game stats for user \"%s\": %s\n", username, err)
 		return
 	}
@@ -105,7 +105,7 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
 	}
 	username := req.URL.Query().Get("username")
 
-	if err := performSetupCheck(w, username); err != nil {
+	if err := performSetupCheck(w, &state.SetupRequests, username); err != nil {
 		fmt.Printf("Error getting win stats for user \"%s\": %s\n", username, err)
 		return
 	}
@@ -176,7 +176,7 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 	}
 	username := req.URL.Query().Get("username")
 
-	if err := performSetupCheck(w, username); err != nil {
+	if err := performSetupCheck(w, &state.SetupRequests, username); err != nil {
 		fmt.Printf("Error getting loss stats for user \"%s\": %s\n", username, err)
 		return
 	}
@@ -247,7 +247,7 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 	}
 	username := req.URL.Query().Get("username")
 
-	if err := performSetupCheck(w, username); err != nil {
+	if err := performSetupCheck(w, &state.SetupRequests, username); err != nil {
 		fmt.Printf("Error getting draw stats for user \"%s\": %s\n", username, err)
 		return
 	}

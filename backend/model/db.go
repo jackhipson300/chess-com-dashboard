@@ -8,8 +8,6 @@ import (
   "backend/types"
   "os"
   "path/filepath"
-
-	"gopkg.in/freeeve/pgn.v1"
 )
 
 const insertBatchSize = 5000
@@ -55,7 +53,7 @@ func CreateTables(db *sql.DB) {
 	}
 }
 
-func insertGame(tx *sql.Tx, stmt *sql.Stmt, game Game) error {
+func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) error {
 	var winner interface{} = nil
 	result := game.WhitePlayer.Result
 	if game.WhitePlayer.Result == "win" {
@@ -66,7 +64,7 @@ func insertGame(tx *sql.Tx, stmt *sql.Stmt, game Game) error {
 		result = game.WhitePlayer.Result
 	}
 
-	_, err := tx.Stmt(stmt).Exec(
+	_, err := tx.Stmt(gameStmt).Exec(
 		game.Id,
 		game.Url,
 		game.TimeClass,
@@ -82,43 +80,16 @@ func insertGame(tx *sql.Tx, stmt *sql.Stmt, game Game) error {
 		return fmt.Errorf("insert game error: %w", err)
 	}
 
+  for _, fen := range game.Fens {
+    hash := sha256.New()
+    hash.Write([]byte(fen))
+    hash.Write([]byte(game.Id))
+    if _, err := tx.Stmt(fenStmt).Exec(hash.Sum(nil), fen, game.Id); err != nil {
+      continue
+    }
+  }
+
 	return nil
-}
-
-func insertFens(tx *sql.Tx, stmt *sql.Stmt, pgnStr string, gameId string) (int, int) {
-	numPositionsInserted := 0
-	numPositionInsertErrors := 0
-
-	ps := pgn.NewPGNScanner(strings.NewReader(pgnStr))
-	for ps.Next() {
-		game, err := ps.Scan()
-		if err != nil {
-			numPositionInsertErrors++
-			continue
-		}
-
-		b := pgn.NewBoard()
-		for _, move := range game.Moves {
-			if err := b.MakeMove(move); err != nil {
-				continue
-			}
-			fenParts := strings.Split(b.String(), " ")
-			fenStr := strings.Join(fenParts[:len(fenParts)-2], " ")
-
-			hash := sha256.New()
-			hash.Write([]byte(fenStr))
-			hash.Write([]byte(gameId))
-
-			if _, err := tx.Stmt(stmt).Exec(hash.Sum(nil), fenStr, gameId); err != nil {
-				numPositionInsertErrors++
-				continue
-			}
-
-			numPositionsInserted++
-		}
-	}
-
-	return numPositionsInserted, numPositionInsertErrors
 }
 
 func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
@@ -162,15 +133,11 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 			continue
 		}
 
-		if err := insertGame(tx, gameInsertStmt, game); err != nil {
+		if err := insertGame(tx, gameInsertStmt, fenInsertStmt, game); err != nil {
 			numGameInsertErrors++
 		} else {
 			numGamesInserted++
 		}
-
-		currNumPositionsInserted, currNumPositionInsertErrors := insertFens(tx, fenInsertStmt, game.Pgn, game.Id)
-		numPositionsInserted += currNumPositionsInserted
-		numPositionInsertErrors += currNumPositionInsertErrors
 
 		if i%insertBatchSize == 0 {
 			if err := tx.Commit(); err != nil {
@@ -183,6 +150,7 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 			}
 		}
 	}
+  fmt.Println()
 
 	if err := tx.Commit(); err != nil {
 		return InsertStatistics{}, fmt.Errorf("error committing final transaction: %w", err)
