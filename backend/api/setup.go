@@ -30,12 +30,15 @@ func isSetup(username string) bool {
 	return false
 }
 
-func isSetupInProgress(setupRequests *map[string]string, username string) bool {
+func isSetupInProgress(setupRequests *types.SetupRequests, username string) bool {
 	requestId := utils.Hash(username)
-	return (*setupRequests)[requestId] == "Started"
+
+	setupRequests.Mu.Lock()
+	defer setupRequests.Mu.Unlock()
+	return (*setupRequests.Resource)[requestId] == "Started"
 }
 
-func performSetupCheck(w http.ResponseWriter, setupRequests *map[string]string, username string) error {
+func performSetupCheck(w http.ResponseWriter, setupRequests *types.SetupRequests, username string) error {
 	if isSetupInProgress(setupRequests, username) {
 		http.Error(w, "User data setup in progress", http.StatusBadRequest)
 		return errors.New("user data setup in progress")
@@ -50,6 +53,8 @@ func performSetupCheck(w http.ResponseWriter, setupRequests *map[string]string, 
 }
 
 func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
+	state.SetupRequests.Mu.Lock()
+	defer state.SetupRequests.Mu.Unlock()
 	if req.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -66,15 +71,15 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 	}
 
 	requestId := utils.Hash(body.Username)
-	if state.SetupRequests[requestId] != "" {
+	if (*state.SetupRequests.Resource)[requestId] != "" {
 		json.NewEncoder(w).Encode(SetupResp{
 			Id:     requestId,
-			Status: state.SetupRequests[requestId],
+			Status: (*state.SetupRequests.Resource)[requestId],
 		})
 		return
 	}
 
-	state.SetupRequests[requestId] = "Started"
+	(*state.SetupRequests.Resource)[requestId] = "Started"
 	json.NewEncoder(w).Encode(SetupResp{
 		Id:     requestId,
 		Status: "Started",
@@ -83,14 +88,17 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 	go func() {
 		setupStart := time.Now()
 
-		dbFilename := fmt.Sprintf("./%s.db", requestId)
+		dbFilename := fmt.Sprintf("file:%s.db?_journal_mode=WAL&_synchronous=NORMAL", requestId)
 		db, err := sql.Open("sqlite3", dbFilename)
 		if err != nil {
 			fmt.Println("Error opening db")
-			state.SetupRequests[requestId] = "Failed"
+			state.SetupRequests.Mu.Lock()
+			defer state.SetupRequests.Mu.Unlock()
+			(*state.SetupRequests.Resource)[requestId] = "Failed"
 			return
 		}
-		state.DBMap[requestId] = db
+
+		state.DBMap[requestId] = types.NewLockedDB(db)
 
 		model.CreateTables(db)
 
@@ -105,7 +113,9 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 		insertStats, err := model.InsertUserData(db, allGames)
 		if err != nil {
 			fmt.Println("Critical failure occurred while inserting into db")
-			state.SetupRequests[requestId] = "Failed"
+			state.SetupRequests.Mu.Lock()
+			defer state.SetupRequests.Mu.Unlock()
+			(*state.SetupRequests.Resource)[requestId] = "Failed"
 			return
 		}
 
@@ -118,6 +128,8 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 
 		fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
 
-    state.SetupRequests[requestId] = "Complete"
+		state.SetupRequests.Mu.Lock()
+		defer state.SetupRequests.Mu.Unlock()
+		(*state.SetupRequests.Resource)[requestId] = "Complete"
 	}()
 }

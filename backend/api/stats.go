@@ -15,19 +15,19 @@ type GameStats struct {
 }
 
 type WinLossStats struct {
-  NumResigns int `json:"resigns"`
-  NumCheckmates int `json:"checkmates"`
-  NumAbandons int `json:"abandons"`
-  NumTimeouts int `json:"timeouts"`
+	NumResigns    int `json:"resigns"`
+	NumCheckmates int `json:"checkmates"`
+	NumAbandons   int `json:"abandons"`
+	NumTimeouts   int `json:"timeouts"`
 }
 
 type DrawStats struct {
-  NumRepetitions int `json:"repetitions"`
-  NumInsufficients int `json:"insufficients"`
-  NumTimeoutVsInsufficients int `json:"timeoutVsInsufficients"`
-  NumStalemates int `json:"stalemates"`
-  NumAgrees int `json:"agrees"`
-  Num50Rules int `json:"fiftyMoveRules"`
+	NumRepetitions            int `json:"repetitions"`
+	NumInsufficients          int `json:"insufficients"`
+	NumTimeoutVsInsufficients int `json:"timeoutVsInsufficients"`
+	NumStalemates             int `json:"stalemates"`
+	NumAgrees                 int `json:"agrees"`
+	Num50Rules                int `json:"fiftyMoveRules"`
 }
 
 func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
@@ -62,8 +62,10 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
 
-	rows, err := db.Query(queryStr, username)
+	rows, err := db.Resource.Query(queryStr, username)
 	if err != nil {
 		fmt.Printf("Error making game stats query: %s\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -110,7 +112,7 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
 		return
 	}
 
-  queryStr := `
+	queryStr := `
   SELECT
     tc.time_class,
     COALESCE(SUM(CASE WHEN g.result = 'resigned' THEN 1 ELSE NULL END), 0) as resigns,
@@ -131,42 +133,44 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
 
-	rows, err := db.Query(queryStr, username)
+	rows, err := db.Resource.Query(queryStr, username)
 	if err != nil {
 		fmt.Printf("Error making win stats query: %s\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
-    
-  response := make(map[string]WinLossStats)
-  for rows.Next() {
-    var timeClass string 
-    var resigns int 
-    var checkmates int 
-    var abandons int 
-    var timeouts int 
 
-    if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
-      fmt.Printf("Error parsing win stats query result: %s\n", err)
-      http.Error(w, "Internal server error", http.StatusInternalServerError)
-      return
-    }
+	response := make(map[string]WinLossStats)
+	for rows.Next() {
+		var timeClass string
+		var resigns int
+		var checkmates int
+		var abandons int
+		var timeouts int
 
-    response[timeClass] = WinLossStats{
-      NumResigns: resigns,
-      NumCheckmates: checkmates,
-      NumAbandons: abandons,
-      NumTimeouts: timeouts,
-    }
-  }
+		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
+			fmt.Printf("Error parsing win stats query result: %s\n", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-  if err := json.NewEncoder(w).Encode(response); err != nil {
-    fmt.Printf("Error encoding win stats query result: %s\n", err)
-    http.Error(w, "Internal server error", http.StatusInternalServerError)
-    return
-  }
+		response[timeClass] = WinLossStats{
+			NumResigns:    resigns,
+			NumCheckmates: checkmates,
+			NumAbandons:   abandons,
+			NumTimeouts:   timeouts,
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		fmt.Printf("Error encoding win stats query result: %s\n", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
@@ -181,7 +185,7 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		return
 	}
 
-  queryStr := `
+	queryStr := `
   SELECT
     tc.time_class,
     COALESCE(SUM(CASE WHEN g.result = 'resigned' THEN 1 ELSE NULL END), 0) as resigns,
@@ -202,42 +206,44 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
 
-	rows, err := db.Query(queryStr, username)
+	rows, err := db.Resource.Query(queryStr, username)
 	if err != nil {
 		fmt.Printf("Error making loss stats query: %s\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
-    
-  response := make(map[string]WinLossStats)
-  for rows.Next() {
-    var timeClass string 
-    var resigns int 
-    var checkmates int 
-    var abandons int 
-    var timeouts int 
 
-    if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
-      fmt.Printf("Error parsing loss stats query result: %s\n", err)
-      http.Error(w, "Internal server error", http.StatusInternalServerError)
-      return
-    }
+	response := make(map[string]WinLossStats)
+	for rows.Next() {
+		var timeClass string
+		var resigns int
+		var checkmates int
+		var abandons int
+		var timeouts int
 
-    response[timeClass] = WinLossStats{
-      NumResigns: resigns,
-      NumCheckmates: checkmates,
-      NumAbandons: abandons,
-      NumTimeouts: timeouts,
-    }
-  }
+		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
+			fmt.Printf("Error parsing loss stats query result: %s\n", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-  if err := json.NewEncoder(w).Encode(response); err != nil {
-    fmt.Printf("Error encoding loss stats query result: %s\n", err)
-    http.Error(w, "Internal server error", http.StatusInternalServerError)
-    return
-  }
+		response[timeClass] = WinLossStats{
+			NumResigns:    resigns,
+			NumCheckmates: checkmates,
+			NumAbandons:   abandons,
+			NumTimeouts:   timeouts,
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		fmt.Printf("Error encoding loss stats query result: %s\n", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
@@ -252,7 +258,7 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		return
 	}
 
-  queryStr := `
+	queryStr := `
   SELECT
     tc.time_class,
     COALESCE(SUM(CASE WHEN g.result = 'repetition' THEN 1 ELSE NULL END), 0) as repetitions,
@@ -275,52 +281,54 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
 
-	rows, err := db.Query(queryStr)
+	rows, err := db.Resource.Query(queryStr)
 	if err != nil {
 		fmt.Printf("Error making draw stats query: %s\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
-    
-  response := make(map[string]DrawStats)
-  for rows.Next() {
-    var timeClass string 
-    var repetitions int 
-    var insufficients int 
-    var timeoutVsInsufficients int 
-    var stalemates int 
-    var agrees int
-    var fiftyMoveRules int
 
-    if err := rows.Scan(
-      &timeClass, 
-      &repetitions, 
-      &insufficients, 
-      &timeoutVsInsufficients, 
-      &stalemates, 
-      &agrees, 
-      &fiftyMoveRules,
-    ); err != nil {
-      fmt.Printf("Error parsing draw stats query result: %s\n", err)
-      http.Error(w, "Internal server error", http.StatusInternalServerError)
-      return
-    }
+	response := make(map[string]DrawStats)
+	for rows.Next() {
+		var timeClass string
+		var repetitions int
+		var insufficients int
+		var timeoutVsInsufficients int
+		var stalemates int
+		var agrees int
+		var fiftyMoveRules int
 
-    response[timeClass] = DrawStats{
-      NumRepetitions: repetitions,  
-      NumInsufficients: insufficients, 
-      NumTimeoutVsInsufficients: timeoutVsInsufficients, 
-      NumStalemates: stalemates, 
-      NumAgrees: agrees, 
-      Num50Rules: fiftyMoveRules, 
-    }
-  }
+		if err := rows.Scan(
+			&timeClass,
+			&repetitions,
+			&insufficients,
+			&timeoutVsInsufficients,
+			&stalemates,
+			&agrees,
+			&fiftyMoveRules,
+		); err != nil {
+			fmt.Printf("Error parsing draw stats query result: %s\n", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 
-  if err := json.NewEncoder(w).Encode(response); err != nil {
-    fmt.Printf("Error encoding draw stats query result: %s\n", err)
-    http.Error(w, "Internal server error", http.StatusInternalServerError)
-    return
-  }
+		response[timeClass] = DrawStats{
+			NumRepetitions:            repetitions,
+			NumInsufficients:          insufficients,
+			NumTimeoutVsInsufficients: timeoutVsInsufficients,
+			NumStalemates:             stalemates,
+			NumAgrees:                 agrees,
+			Num50Rules:                fiftyMoveRules,
+		}
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		fmt.Printf("Error encoding draw stats query result: %s\n", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }

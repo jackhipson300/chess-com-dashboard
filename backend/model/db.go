@@ -1,13 +1,13 @@
 package model
 
 import (
+	"backend/types"
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
-  "backend/types"
-  "os"
-  "path/filepath"
 )
 
 const insertBatchSize = 5000
@@ -80,14 +80,14 @@ func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) er
 		return fmt.Errorf("insert game error: %w", err)
 	}
 
-  for _, fen := range game.Fens {
-    hash := sha256.New()
-    hash.Write([]byte(fen))
-    hash.Write([]byte(game.Id))
-    if _, err := tx.Stmt(fenStmt).Exec(hash.Sum(nil), fen, game.Id); err != nil {
-      continue
-    }
-  }
+	for _, fen := range game.Fens {
+		hash := sha256.New()
+		hash.Write([]byte(fen))
+		hash.Write([]byte(game.Id))
+		if _, err := tx.Stmt(fenStmt).Exec(hash.Sum(nil), fen, game.Id); err != nil {
+			continue
+		}
+	}
 
 	return nil
 }
@@ -150,7 +150,7 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 			}
 		}
 	}
-  fmt.Println()
+	fmt.Println()
 
 	if err := tx.Commit(); err != nil {
 		return InsertStatistics{}, fmt.Errorf("error committing final transaction: %w", err)
@@ -165,34 +165,41 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 	}
 
 	return InsertStatistics{
-    NumGamesInserted: numGamesInserted,
-    NumGameInsertErrors: numGameInsertErrors,
-    NumPositionsInserted: numPositionsInserted,
-    NumPositionInsertErrors: numPositionInsertErrors,
+		NumGamesInserted:        numGamesInserted,
+		NumGameInsertErrors:     numGameInsertErrors,
+		NumPositionsInserted:    numPositionsInserted,
+		NumPositionInsertErrors: numPositionInsertErrors,
 	}, nil
 }
 
-func LoadExistingDbs(state *types.ServerState) error {
-  cwd, err := os.Getwd()
-  if err != nil {
-    return fmt.Errorf("error loading existing dbs: %w", err)
-  }
+func LoadExistingDbs(dbMap *types.DBMap) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("error loading existing dbs: %w", err)
+	}
 
-  pattern := filepath.Join(cwd, "*.db")
-  existingDbs, err := filepath.Glob(pattern)
-  if err != nil {
-    return fmt.Errorf("error loading existing dbs: %w", err)
-  }
+	pattern := filepath.Join(cwd, "*.db")
+	existingDbs, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("error loading existing dbs: %w", err)
+	}
 
-  for _, filename := range existingDbs {
-    filenameParts := strings.Split(filename, "/")
-    relativeFilename := filenameParts[len(filenameParts)-1]
-    db, err := sql.Open("sqlite3", relativeFilename)
-    if err != nil {
-      return fmt.Errorf("error loading existing dbs: %w", err)
-    }
-    state.DBMap[relativeFilename[0:len(relativeFilename)-3]] = db
-  }
+	for _, filename := range existingDbs {
+		filenameParts := strings.Split(filename, "/")
+		relativeFilename := filenameParts[len(filenameParts)-1]
+		dbFilename := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL", relativeFilename)
+		db, err := sql.Open("sqlite3", dbFilename)
+		if err != nil {
+			return fmt.Errorf("error loading existing dbs: %w", err)
+		}
+		defer db.Close()
 
-  return nil
+		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+			return fmt.Errorf("error enabling WAL: %w", err)
+		}
+
+		(*dbMap)[relativeFilename[0:len(relativeFilename)-3]] = types.NewLockedDB(db)
+	}
+
+	return nil
 }

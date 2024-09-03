@@ -36,8 +36,8 @@ type RawGame struct {
 }
 
 type Game struct {
-  RawGame
-  Fens []string
+	RawGame
+	Fens []string
 }
 
 type Archive struct {
@@ -90,43 +90,46 @@ func getArchive(url string, wg *sync.WaitGroup, ch chan<- []Game) {
 		panic(err)
 	}
 
-  var games []Game
-  for _, game := range data.Games {
-    games = append(games, parseGame(&game)) 
-  }
+	var games []Game
+	for _, game := range data.Games {
+		games = append(games, parseGame(&game))
+	}
 
 	ch <- games
 }
 
 func parseGame(rawGame *RawGame) Game {
-  var fens []string
-  
-  // variants tend to break pgn parser
-  if !strings.Contains(rawGame.Pgn, "[Variant \"") {
-    ps := pgn.NewPGNScanner(strings.NewReader(rawGame.Pgn))
-    for ps.Next() {
-      game, err := ps.Scan()
-      if err != nil {
-        continue
-      }
+	var fens []string
 
-      b := pgn.NewBoard()
-      for _, move := range game.Moves {
-        if err := b.MakeMove(move); err != nil {
-          continue
-        }
-        fenParts := strings.Split(b.String(), " ")
-        fenStr := strings.Join(fenParts[:len(fenParts)-2], " ")
+	// variants tend to break pgn parser
+	if !strings.Contains(rawGame.Pgn, "[Variant \"") {
+		ps := pgn.NewPGNScanner(strings.NewReader(rawGame.Pgn))
+		for ps.Next() {
+			game, err := ps.Scan()
+			if err != nil {
+				continue
+			}
 
-        fens = append(fens, fenStr)
-      }
-    }
-  }
+			b := pgn.NewBoard()
+			for _, move := range game.Moves {
+				if err := b.MakeMove(move); err != nil {
+					continue
+				}
+				fenParts := strings.Split(b.String(), " ")
+				fenStr := strings.Join(fenParts[:len(fenParts)-2], " ")
 
-  return Game{
-    RawGame: *rawGame,
-    Fens: fens,
-  }
+				fens = append(fens, fenStr)
+			}
+		}
+	}
+
+	rawGame.WhitePlayer.Username = strings.ToLower(rawGame.WhitePlayer.Username)
+	rawGame.BlackPlayer.Username = strings.ToLower(rawGame.BlackPlayer.Username)
+
+	return Game{
+		RawGame: *rawGame,
+		Fens:    fens,
+	}
 }
 
 func GetAllGames(user string) []Game {
@@ -134,7 +137,7 @@ func GetAllGames(user string) []Game {
 	archives := listArchives(user)
 	var wg sync.WaitGroup
 
-	fmt.Println("Requesting individual archives...")
+	fmt.Println("Requesting games...")
 	gamesCh := make(chan []Game, len(archives))
 	for _, archive := range archives {
 		wg.Add(1)
@@ -144,10 +147,9 @@ func GetAllGames(user string) []Game {
 	wg.Wait()
 	close(gamesCh)
 
-	fmt.Println("Parsing pgns...")
-  var allGames []Game
+	var allGames []Game
 	for games := range gamesCh {
-    allGames = append(allGames, games...)
+		allGames = append(allGames, games...)
 	}
 
 	return allGames
