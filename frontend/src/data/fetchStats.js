@@ -1,5 +1,8 @@
 import axios from "axios";
 
+const POLL_TIMEOUT = 30 * 1000
+const POLL_INTERVAL = 1000
+
 export async function fetchStats(search) {
   let result;
   try {
@@ -24,7 +27,7 @@ export async function fetchStats(search) {
     const timeout = setTimeout(() => {
       reject(new Error("Error polling setup: timeout"))
       running = false
-    }, 30 * 1000)
+    }, POLL_TIMEOUT)
 
     const poll = async () => {
       try {
@@ -38,7 +41,7 @@ export async function fetchStats(search) {
           resolve()
           clearTimeout(timeout)
         } else {
-          setTimeout(poll, 500)
+          setTimeout(poll, POLL_INTERVAL)
         }
       } catch(err) {
         if(!err.response || err.response.status !== 400) {
