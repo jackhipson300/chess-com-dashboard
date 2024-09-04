@@ -12,6 +12,7 @@ type GameStats struct {
 	NumWins   int `json:"wins"`
 	NumLosses int `json:"losses"`
 	NumDraws  int `json:"draws"`
+	Total     int `json:"total"`
 }
 
 type WinLossStats struct {
@@ -19,6 +20,7 @@ type WinLossStats struct {
 	NumCheckmates int `json:"checkmates"`
 	NumAbandons   int `json:"abandons"`
 	NumTimeouts   int `json:"timeouts"`
+	Total         int `json:"total"`
 }
 
 type DrawStats struct {
@@ -28,6 +30,7 @@ type DrawStats struct {
 	NumStalemates             int `json:"stalemates"`
 	NumAgrees                 int `json:"agrees"`
 	Num50Rules                int `json:"fiftyMoveRules"`
+	Total                     int `json:"total"`
 }
 
 func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
@@ -47,7 +50,8 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		tc.time_class, 
 		COALESCE(SUM(CASE WHEN g.winner = $1 THEN 1 ELSE NULL END), 0) as wins, 
 		COALESCE(SUM(CASE WHEN g.winner IS NOT NULL AND g.winner != $1 THEN 1 ELSE NULL END), 0) as losses,
-		COALESCE(SUM(CASE WHEN g.winner IS NULL THEN 1 ELSE NULL END), 0) as draws 
+		COALESCE(SUM(CASE WHEN g.winner IS NULL THEN 1 ELSE NULL END), 0) as draws,
+		COUNT(*) as total
 	FROM (
 		SELECT DISTINCT time_class
 		FROM games
@@ -79,8 +83,9 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		var wins int
 		var losses int
 		var draws int
+		var total int
 
-		if err := rows.Scan(&timeClass, &wins, &losses, &draws); err != nil {
+		if err := rows.Scan(&timeClass, &wins, &losses, &draws, &total); err != nil {
 			fmt.Printf("Error parsing game stats query result: %s\n", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -90,6 +95,7 @@ func GetGameStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 			NumWins:   wins,
 			NumLosses: losses,
 			NumDraws:  draws,
+			Total:     total,
 		}
 	}
 
@@ -118,7 +124,8 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
     COALESCE(SUM(CASE WHEN g.result = 'resigned' THEN 1 ELSE NULL END), 0) as resigns,
     COALESCE(SUM(CASE WHEN g.result = 'checkmated' THEN 1 ELSE NULL END), 0) as checkmates,
     COALESCE(SUM(CASE WHEN g.result = 'abandoned' THEN 1 ELSE NULL END), 0) as abandons,
-    COALESCE(SUM(CASE WHEN g.result = 'timeout' THEN 1 ELSE NULL END), 0) as timeouts
+    COALESCE(SUM(CASE WHEN g.result = 'timeout' THEN 1 ELSE NULL END), 0) as timeouts,
+		COUNT(*) as total
   FROM (
     SELECT DISTINCT time_class FROM games
   ) tc 
@@ -151,8 +158,9 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
 		var checkmates int
 		var abandons int
 		var timeouts int
+		var total int
 
-		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
+		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts, &total); err != nil {
 			fmt.Printf("Error parsing win stats query result: %s\n", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -163,6 +171,7 @@ func GetWinStats(w http.ResponseWriter, req *http.Request, state *types.ServerSt
 			NumCheckmates: checkmates,
 			NumAbandons:   abandons,
 			NumTimeouts:   timeouts,
+			Total:         total,
 		}
 	}
 
@@ -191,7 +200,8 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
     COALESCE(SUM(CASE WHEN g.result = 'resigned' THEN 1 ELSE NULL END), 0) as resigns,
     COALESCE(SUM(CASE WHEN g.result = 'checkmated' THEN 1 ELSE NULL END), 0) as checkmates,
     COALESCE(SUM(CASE WHEN g.result = 'abandoned' THEN 1 ELSE NULL END), 0) as abandons,
-    COALESCE(SUM(CASE WHEN g.result = 'timeout' THEN 1 ELSE NULL END), 0) as timeouts
+    COALESCE(SUM(CASE WHEN g.result = 'timeout' THEN 1 ELSE NULL END), 0) as timeouts,
+		COUNT(*) as total
   FROM (
     SELECT DISTINCT time_class FROM games
   ) tc 
@@ -224,8 +234,9 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		var checkmates int
 		var abandons int
 		var timeouts int
+		var total int
 
-		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts); err != nil {
+		if err := rows.Scan(&timeClass, &resigns, &checkmates, &abandons, &timeouts, &total); err != nil {
 			fmt.Printf("Error parsing loss stats query result: %s\n", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -236,6 +247,7 @@ func GetLossStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 			NumCheckmates: checkmates,
 			NumAbandons:   abandons,
 			NumTimeouts:   timeouts,
+			Total:         total,
 		}
 	}
 
@@ -266,7 +278,8 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
     COALESCE(SUM(CASE WHEN g.result = 'timevsinsufficient' THEN 1 ELSE NULL END), 0) as timeoutVsInsufficients,
     COALESCE(SUM(CASE WHEN g.result = 'stalemate' THEN 1 ELSE NULL END), 0) as stalemates,
     COALESCE(SUM(CASE WHEN g.result = 'agreed' THEN 1 ELSE NULL END), 0) as agrees,
-    COALESCE(SUM(CASE WHEN g.result = '50move' THEN 1 ELSE NULL END), 0) as fiftyMoveRules
+    COALESCE(SUM(CASE WHEN g.result = '50move' THEN 1 ELSE NULL END), 0) as fiftyMoveRules,
+		COUNT(*) as total
   FROM (
     SELECT DISTINCT time_class FROM games
   ) tc 
@@ -301,6 +314,7 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 		var stalemates int
 		var agrees int
 		var fiftyMoveRules int
+		var total int
 
 		if err := rows.Scan(
 			&timeClass,
@@ -310,6 +324,7 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 			&stalemates,
 			&agrees,
 			&fiftyMoveRules,
+			&total,
 		); err != nil {
 			fmt.Printf("Error parsing draw stats query result: %s\n", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -323,6 +338,7 @@ func GetDrawStats(w http.ResponseWriter, req *http.Request, state *types.ServerS
 			NumStalemates:             stalemates,
 			NumAgrees:                 agrees,
 			Num50Rules:                fiftyMoveRules,
+			Total:                     total,
 		}
 	}
 
