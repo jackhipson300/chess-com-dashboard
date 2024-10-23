@@ -30,11 +30,18 @@ func cleanup(state *types.ServerState) {
 func main() {
 	state := types.NewServerState()
 
-	if err := model.LoadExistingDbs(&state.DBMap); err != nil {
+	userIds, err := model.LoadExistingDbs(&state.DBMap)
+	if err != nil {
 		fmt.Printf("Fatal error: %s\n", err)
 		cleanup(state)
 		os.Exit(0)
 	}
+
+	state.SetupStatuses.Mu.Lock()
+	for _, userId := range userIds {
+		(*state.SetupStatuses.Resource)[userId] = types.SetupStatusPending
+	}
+	state.SetupStatuses.Mu.Unlock()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/setup", api.MakeHandler(state, api.Setup))

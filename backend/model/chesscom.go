@@ -44,7 +44,8 @@ type Archive struct {
 	Games []RawGame `json:"games"`
 }
 
-func listArchives(user string) []string {
+func ListArchives(user string) []string {
+	fmt.Println("Requesting list of archives...")
 	url := fmt.Sprintf("http://api.chess.com/pub/player/%s/games/archives", user)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -132,9 +133,7 @@ func parseGame(rawGame *RawGame) Game {
 	}
 }
 
-func GetAllGames(user string) []Game {
-	fmt.Println("Requesting list of archives...")
-	archives := listArchives(user)
+func GetAllGames(archives []string) []Game {
 	var wg sync.WaitGroup
 
 	fmt.Println("Requesting games...")

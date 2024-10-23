@@ -19,23 +19,33 @@ func NewLockedDB(db *sql.DB) *LockedDB {
 	}
 }
 
+type SetupStatus string
+
+const (
+	SetupStatusPending  SetupStatus = "Pending"
+	SetupStatusUpdating SetupStatus = "Updating"
+	SetupStatusStarted  SetupStatus = "Started"
+	SetupStatusComplete SetupStatus = "Complete"
+	SetupStatusFailed   SetupStatus = "Failed"
+)
+
 type DBMap map[string]*LockedDB
-type SetupRequests LockedResource[map[string]string]
+type SetupStatuses LockedResource[map[string]SetupStatus]
 
 type ServerState struct {
 	DBMap         DBMap
-	SetupRequests SetupRequests
+	SetupStatuses SetupStatuses
 }
 
 func NewServerState() *ServerState {
 	dbMap := make(map[string]*LockedDB)
 
-	setupRequests := make(map[string]string)
+	setupStatuses := make(map[string]SetupStatus)
 	return &ServerState{
 		DBMap: dbMap,
-		SetupRequests: SetupRequests{
+		SetupStatuses: SetupStatuses{
 			Mu:       sync.Mutex{},
-			Resource: &setupRequests,
+			Resource: &setupStatuses,
 		},
 	}
 }

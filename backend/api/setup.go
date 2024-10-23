@@ -18,8 +18,8 @@ type SetupReqBody struct {
 }
 
 type SetupResp struct {
-	Id     string `json:"id"`
-	Status string `json:"status"`
+	Id     string            `json:"id"`
+	Status types.SetupStatus `json:"status"`
 }
 
 func isSetup(username string) bool {
@@ -30,16 +30,16 @@ func isSetup(username string) bool {
 	return false
 }
 
-func isSetupInProgress(setupRequests *types.SetupRequests, username string) bool {
+func isSetupInProgress(setupStatuses *types.SetupStatuses, username string) bool {
 	requestId := utils.Hash(username)
 
-	setupRequests.Mu.Lock()
-	defer setupRequests.Mu.Unlock()
-	return (*setupRequests.Resource)[requestId] == "Started"
+	setupStatuses.Mu.Lock()
+	defer setupStatuses.Mu.Unlock()
+	return (*setupStatuses.Resource)[requestId] == types.SetupStatusStarted
 }
 
-func performSetupCheck(w http.ResponseWriter, setupRequests *types.SetupRequests, username string) error {
-	if isSetupInProgress(setupRequests, username) {
+func performSetupCheck(w http.ResponseWriter, setupStatuses *types.SetupStatuses, username string) error {
+	if isSetupInProgress(setupStatuses, username) {
 		http.Error(w, "User data setup in progress", http.StatusBadRequest)
 		return errors.New("user data setup in progress")
 	}
@@ -52,15 +52,12 @@ func performSetupCheck(w http.ResponseWriter, setupRequests *types.SetupRequests
 	return nil
 }
 
-func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
-	state.SetupRequests.Mu.Lock()
-	defer state.SetupRequests.Mu.Unlock()
+func validateSetupRequest(w http.ResponseWriter, req *http.Request) (body SetupReqBody, valid bool) {
 	if req.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var body SetupReqBody
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -70,66 +67,132 @@ func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
 		http.Error(w, "Username required", http.StatusBadRequest)
 	}
 
+	valid = true
+	return
+}
+
+func fullSetup(requestId string, username string, state *types.ServerState) {
+	setupStart := time.Now()
+
+	dbFilename := fmt.Sprintf("file:%s.db?_journal_mode=WAL&_synchronous=NORMAL", requestId)
+	db, err := sql.Open("sqlite3", dbFilename)
+	if err != nil {
+		fmt.Println("Error opening db")
+		state.SetupStatuses.Mu.Lock()
+		defer state.SetupStatuses.Mu.Unlock()
+		(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusFailed
+		return
+	}
+
+	state.DBMap[requestId] = types.NewLockedDB(db)
+
+	model.CreateTables(db)
+
+	fmt.Println("User data request started:")
+	requestGamesStart := time.Now()
+
+	archives := model.ListArchives(username)
+	allGames := model.GetAllGames(archives)
+	duration := time.Since(requestGamesStart)
+	fmt.Printf("%d games received in %v!\n", len(allGames), duration)
+
+	fmt.Println("Inserting into db started:")
+	insertStart := time.Now()
+	insertStats, err := model.InsertUserData(db, requestId, username, allGames, archives)
+	if err != nil {
+		fmt.Println("Critical failure occurred while inserting into db:", err.Error())
+		state.SetupStatuses.Mu.Lock()
+		defer state.SetupStatuses.Mu.Unlock()
+		(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusFailed
+		return
+	}
+
+	duration = time.Since(insertStart)
+	fmt.Printf("Inserted user data in %v\n", duration)
+	fmt.Printf("  %d games inserted\n", insertStats.NumGamesInserted)
+	fmt.Printf("  %d games failed to insert\n", insertStats.NumGameInsertErrors)
+	fmt.Printf("  %d positions inserted\n", insertStats.NumPositionsInserted)
+	fmt.Printf("  %d positions failed to insert\n", insertStats.NumPositionInsertErrors)
+
+	fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
+
+	state.SetupStatuses.Mu.Lock()
+	defer state.SetupStatuses.Mu.Unlock()
+	(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusPending
+}
+
+func updateExistingUser(requestId string, username string, state *types.ServerState) {
+	db, exists := state.DBMap[requestId]
+	if !exists {
+		fmt.Printf("Error updating existing user: db for user %s doesn't exist\n", requestId)
+	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+
+	allArchives := model.ListArchives(username)
+	latestStoredArchive, _ := model.GetMostRecentArchive(requestId, db.Resource)
+	latestDate, _ := archiveToLogicalTimestamp(latestStoredArchive)
+
+	archivesToUpdate := []string{}
+	for _, archive := range allArchives {
+		date, _ := archiveToLogicalTimestamp(archive)
+		if date >= latestDate {
+			archivesToUpdate = append(archivesToUpdate, archive)
+		}
+	}
+
+	fmt.Println("latest archive", latestStoredArchive)
+	fmt.Println("archives to update", archivesToUpdate)
+
+	games := model.GetAllGames(archivesToUpdate)
+	insertStats, err := model.InsertUserData(db.Resource, requestId, username, games, archivesToUpdate)
+	if err != nil {
+		fmt.Println("Error updating user data:", err.Error())
+	}
+
+	fmt.Println(insertStats)
+}
+
+func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {
+	state.SetupStatuses.Mu.Lock()
+	defer state.SetupStatuses.Mu.Unlock()
+
+	body, valid := validateSetupRequest(w, req)
+	if !valid {
+		return
+	}
+
+	jsonEncoder := json.NewEncoder(w)
+
 	requestId := utils.Hash(body.Username)
-	if (*state.SetupRequests.Resource)[requestId] != "" {
-		json.NewEncoder(w).Encode(SetupResp{
+	currentStatus := (*state.SetupStatuses.Resource)[requestId]
+
+	// if the setup is pending, we need to update the existing data instead of doing a full setup
+	if currentStatus == types.SetupStatusPending {
+		(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusUpdating
+		jsonEncoder.Encode(SetupResp{
 			Id:     requestId,
-			Status: (*state.SetupRequests.Resource)[requestId],
+			Status: types.SetupStatusUpdating,
+		})
+		go updateExistingUser(requestId, body.Username, state)
+		return
+	}
+
+	// if setup has already been called, return the existing state
+	if currentStatus != "" {
+		jsonEncoder.Encode(SetupResp{
+			Id:     requestId,
+			Status: currentStatus,
 		})
 		return
 	}
 
-	(*state.SetupRequests.Resource)[requestId] = "Started"
-	json.NewEncoder(w).Encode(SetupResp{
+	// notify the client that the setup has started
+	(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusStarted
+	jsonEncoder.Encode(SetupResp{
 		Id:     requestId,
-		Status: "Started",
+		Status: types.SetupStatusStarted,
 	})
 
-	go func() {
-		setupStart := time.Now()
-
-		dbFilename := fmt.Sprintf("file:%s.db?_journal_mode=WAL&_synchronous=NORMAL", requestId)
-		db, err := sql.Open("sqlite3", dbFilename)
-		if err != nil {
-			fmt.Println("Error opening db")
-			state.SetupRequests.Mu.Lock()
-			defer state.SetupRequests.Mu.Unlock()
-			(*state.SetupRequests.Resource)[requestId] = "Failed"
-			return
-		}
-
-		state.DBMap[requestId] = types.NewLockedDB(db)
-
-		model.CreateTables(db)
-
-		fmt.Println("User data request started:")
-		requestGamesStart := time.Now()
-		allGames := model.GetAllGames(body.Username)
-		duration := time.Since(requestGamesStart)
-		fmt.Printf("%d games received in %v!\n", len(allGames), duration)
-
-		fmt.Println("Inserting into db started:")
-		insertStart := time.Now()
-		insertStats, err := model.InsertUserData(db, allGames)
-		if err != nil {
-			fmt.Println("Critical failure occurred while inserting into db")
-			state.SetupRequests.Mu.Lock()
-			defer state.SetupRequests.Mu.Unlock()
-			(*state.SetupRequests.Resource)[requestId] = "Failed"
-			return
-		}
-
-		duration = time.Since(insertStart)
-		fmt.Printf("Inserted user data in %v\n", duration)
-		fmt.Printf("  %d games inserted\n", insertStats.NumGamesInserted)
-		fmt.Printf("  %d games failed to insert\n", insertStats.NumGameInsertErrors)
-		fmt.Printf("  %d positions inserted\n", insertStats.NumPositionsInserted)
-		fmt.Printf("  %d positions failed to insert\n", insertStats.NumPositionInsertErrors)
-
-		fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
-
-		state.SetupRequests.Mu.Lock()
-		defer state.SetupRequests.Mu.Unlock()
-		(*state.SetupRequests.Resource)[requestId] = "Complete"
-	}()
+	go fullSetup(requestId, body.Username, state)
 }

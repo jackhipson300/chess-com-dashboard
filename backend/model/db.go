@@ -43,6 +43,14 @@ func CreateTables(db *sql.DB) {
 	)
 	`
 
+	createUsersTable := `
+	CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		username TEXT,
+		latest_archive TEXT
+	)
+	`
+
 	if _, err := db.Exec(createGamesTable); err != nil {
 		fmt.Println("Error creating games table")
 		panic(err)
@@ -51,9 +59,13 @@ func CreateTables(db *sql.DB) {
 		fmt.Println("Error creating positions table")
 		panic(err)
 	}
+	if _, err := db.Exec(createUsersTable); err != nil {
+		fmt.Println("Error creating users table")
+		panic(err)
+	}
 }
 
-func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) error {
+func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) (numPositionsInserted int, numPositionInsertErrors int, err error) {
 	var winner interface{} = nil
 	result := game.WhitePlayer.Result
 	if game.WhitePlayer.Result == "win" {
@@ -64,7 +76,7 @@ func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) er
 		result = game.WhitePlayer.Result
 	}
 
-	_, err := tx.Stmt(gameStmt).Exec(
+	_, err = tx.Stmt(gameStmt).Exec(
 		game.Id,
 		game.Url,
 		game.TimeClass,
@@ -77,7 +89,8 @@ func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) er
 		result,
 	)
 	if err != nil {
-		return fmt.Errorf("insert game error: %w", err)
+		err = fmt.Errorf("insert game error: %w", err)
+		return
 	}
 
 	for _, fen := range game.Fens {
@@ -85,14 +98,16 @@ func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) er
 		hash.Write([]byte(fen))
 		hash.Write([]byte(game.Id))
 		if _, err := tx.Stmt(fenStmt).Exec(hash.Sum(nil), fen, game.Id); err != nil {
+			numPositionInsertErrors++
 			continue
 		}
+		numPositionsInserted++
 	}
 
-	return nil
+	return
 }
 
-func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
+func InsertUserData(db *sql.DB, userId string, username string, allGames []Game, archives []string) (statistics InsertStatistics, err error) {
 	numGamesInserted := 0
 	numPositionsInserted := 0
 	numGameInsertErrors := 0
@@ -100,7 +115,7 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 
 	tx, err := db.Begin()
 	if err != nil {
-		return InsertStatistics{}, fmt.Errorf("error starting initial transaction: %w", err)
+		return statistics, fmt.Errorf("error starting initial transaction: %w", err)
 	}
 
 	gameInsertStmt, err := db.Prepare(`
@@ -117,12 +132,12 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 		result
 	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return InsertStatistics{}, fmt.Errorf("error preparing games insert: %w", err)
+		return statistics, fmt.Errorf("error preparing games insert: %w", err)
 	}
 	defer gameInsertStmt.Close()
 	fenInsertStmt, err := db.Prepare("INSERT OR IGNORE INTO positions (id, fen, game_id) VALUES(?, ?, ?)")
 	if err != nil {
-		return InsertStatistics{}, fmt.Errorf("error preparing positions insert: %w", err)
+		return statistics, fmt.Errorf("error preparing positions insert: %w", err)
 	}
 	defer fenInsertStmt.Close()
 
@@ -133,27 +148,30 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 			continue
 		}
 
-		if err := insertGame(tx, gameInsertStmt, fenInsertStmt, game); err != nil {
+		currNumPositionsInserted, currNumPositionInsertErrors, err := insertGame(tx, gameInsertStmt, fenInsertStmt, game)
+		if err != nil {
 			numGameInsertErrors++
 		} else {
 			numGamesInserted++
 		}
+		numPositionsInserted += currNumPositionsInserted
+		numPositionInsertErrors += currNumPositionInsertErrors
 
 		if i%insertBatchSize == 0 {
 			if err := tx.Commit(); err != nil {
-				return InsertStatistics{}, fmt.Errorf("error committing transaction: %w", err)
+				return statistics, fmt.Errorf("error committing transaction: %w", err)
 			}
 
 			tx, err = db.Begin()
 			if err != nil {
-				return InsertStatistics{}, fmt.Errorf("error beginning transaction: %w", err)
+				return statistics, fmt.Errorf("error beginning transaction: %w", err)
 			}
 		}
 	}
 	fmt.Println()
 
 	if err := tx.Commit(); err != nil {
-		return InsertStatistics{}, fmt.Errorf("error committing final transaction: %w", err)
+		return statistics, fmt.Errorf("error committing final transaction: %w", err)
 	}
 
 	fmt.Println("Indexing db...")
@@ -161,7 +179,16 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 	CREATE INDEX IF NOT EXISTS fen_idx ON positions(fen)
 	`
 	if _, err := db.Exec(createPositionsIndex); err != nil {
-		return InsertStatistics{}, fmt.Errorf("error creating positions index: %w", err)
+		return statistics, fmt.Errorf("error creating positions index: %w", err)
+	}
+
+	if len(archives) > 0 {
+		mostRecentArchive := archives[len(archives)-1]
+		insertUserStmt := "INSERT OR IGNORE INTO users (id, username, latest_archive) VALUES(?, ?, ?)"
+		_, err = db.Exec(insertUserStmt, userId, username, mostRecentArchive)
+		if err != nil {
+			return statistics, fmt.Errorf("error inserting user entry: %w", err)
+		}
 	}
 
 	return InsertStatistics{
@@ -172,34 +199,69 @@ func InsertUserData(db *sql.DB, allGames []Game) (InsertStatistics, error) {
 	}, nil
 }
 
-func LoadExistingDbs(dbMap *types.DBMap) error {
+func LoadExistingDbs(dbMap *types.DBMap) (userIds []string, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("error loading existing dbs: %w", err)
+		return nil, fmt.Errorf("error loading existing dbs: %w", err)
 	}
 
 	pattern := filepath.Join(cwd, "*.db")
 	existingDbs, err := filepath.Glob(pattern)
 	if err != nil {
-		return fmt.Errorf("error loading existing dbs: %w", err)
+		return nil, fmt.Errorf("error loading existing dbs: %w", err)
 	}
 
-	for _, filename := range existingDbs {
-		filenameParts := strings.Split(filename, "/")
-		relativeFilename := filenameParts[len(filenameParts)-1]
-		dbFilename := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL", relativeFilename)
+	for _, filepath := range existingDbs {
+		filepathParts := strings.Split(filepath, "/")
+		filenameWithExtension := filepathParts[len(filepathParts)-1]
+		dbFilename := fmt.Sprintf("file:%s?_journal_mode=WAL&_synchronous=NORMAL", filenameWithExtension)
 		db, err := sql.Open("sqlite3", dbFilename)
 		if err != nil {
-			return fmt.Errorf("error loading existing dbs: %w", err)
+			return nil, fmt.Errorf("error loading existing dbs: %w", err)
 		}
 		defer db.Close()
 
 		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
-			return fmt.Errorf("error enabling WAL: %w", err)
+			return nil, fmt.Errorf("error enabling WAL: %w", err)
 		}
 
-		(*dbMap)[relativeFilename[0:len(relativeFilename)-3]] = types.NewLockedDB(db)
+		filenameWithoutExtension := filenameWithExtension[0 : len(filenameWithExtension)-3]
+		(*dbMap)[filenameWithoutExtension] = types.NewLockedDB(db)
+		userIds = append(userIds, filenameWithoutExtension)
 	}
 
-	return nil
+	return
 }
+
+func GetMostRecentArchive(userId string, db *sql.DB) (archive string, err error) {
+	queryStr := `
+	SELECT latest_archive
+	FROM users
+	WHERE id = $1
+	`
+
+	rows, err := db.Query(queryStr, userId)
+	if err != nil {
+		return
+	}
+
+	if !rows.Next() {
+		err = fmt.Errorf("no user query result")
+		return
+	}
+
+	err = rows.Scan(&archive)
+
+	return
+}
+
+/*
+	when loading initial dbs, set the setupstatus to pending
+	when the user calls setup, check if it is pending
+	if it is,
+	get the latest archive in storage,
+	if it is the current month or less, fetch the new archives
+		note that when we do this, we should always consider the most recent stored archive as
+		incomplete and replace it
+	we need to be able to avoid duplicate position entries because of this
+*/
