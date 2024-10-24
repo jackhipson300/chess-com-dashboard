@@ -44,29 +44,30 @@ type Archive struct {
 	Games []RawGame `json:"games"`
 }
 
-func ListArchives(user string) []string {
+func ListArchives(user string) (archives []string, err error) {
 	fmt.Println("Requesting list of archives...")
 	url := fmt.Sprintf("http://api.chess.com/pub/player/%s/games/archives", user)
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println("Error requesting archives")
-		panic(err)
+		err = fmt.Errorf("error requesting archives: %w", err)
+		return
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("Error parsing archives list body")
-		panic(err)
+		err = fmt.Errorf("error parsing archives list body: %w", err)
+		return
 	}
 
 	var data ArchivesData
-	if err := json.Unmarshal(body, &data); err != nil {
-		fmt.Println("Error parsing archives list json")
-		panic(err)
+	if err = json.Unmarshal(body, &data); err != nil {
+		err = fmt.Errorf("error parsing archives list json: %w", err)
+		return
 	}
 
-	return data.Archives
+	archives = data.Archives
+	return
 }
 
 func getArchive(url string, wg *sync.WaitGroup, ch chan<- []Game) {
@@ -75,20 +76,20 @@ func getArchive(url string, wg *sync.WaitGroup, ch chan<- []Game) {
 	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Error requesting archive")
-		panic(err)
+		return
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Error parsing archive body")
-		panic(err)
+		return
 	}
 
 	var data Archive
 	if err := json.Unmarshal(body, &data); err != nil {
 		fmt.Println("Error parsing archive json")
-		panic(err)
+		return
 	}
 
 	var games []Game

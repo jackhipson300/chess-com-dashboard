@@ -71,16 +71,27 @@ func validateSetupRequest(w http.ResponseWriter, req *http.Request) (body SetupR
 	return
 }
 
+func handleSetupError(requestId string, err error, setupStatuses *types.SetupStatuses) {
+	fmt.Println("Error during setup:", err.Error())
+	setupStatuses.Mu.Lock()
+	defer setupStatuses.Mu.Unlock()
+	(*setupStatuses.Resource)[requestId] = types.SetupStatusFailed
+}
+
+func printInsertStats(stats model.InsertStatistics) {
+	fmt.Printf("  %d games inserted\n", stats.NumGamesInserted)
+	fmt.Printf("  %d games failed to insert\n", stats.NumGameInsertErrors)
+	fmt.Printf("  %d positions inserted\n", stats.NumPositionsInserted)
+	fmt.Printf("  %d positions failed to insert\n", stats.NumPositionInsertErrors)
+}
+
 func fullSetup(requestId string, username string, state *types.ServerState) {
 	setupStart := time.Now()
 
 	dbFilename := fmt.Sprintf("file:%s.db?_journal_mode=WAL&_synchronous=NORMAL", requestId)
 	db, err := sql.Open("sqlite3", dbFilename)
 	if err != nil {
-		fmt.Println("Error opening db")
-		state.SetupStatuses.Mu.Lock()
-		defer state.SetupStatuses.Mu.Unlock()
-		(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusFailed
+		handleSetupError(requestId, fmt.Errorf("error opening db: %w", err), &state.SetupStatuses)
 		return
 	}
 
@@ -91,7 +102,12 @@ func fullSetup(requestId string, username string, state *types.ServerState) {
 	fmt.Println("User data request started:")
 	requestGamesStart := time.Now()
 
-	archives := model.ListArchives(username)
+	archives, err := model.ListArchives(username)
+	if err != nil {
+		handleSetupError(requestId, fmt.Errorf("error opening db: %w", err), &state.SetupStatuses)
+		return
+	}
+
 	allGames := model.GetAllGames(archives)
 	duration := time.Since(requestGamesStart)
 	fmt.Printf("%d games received in %v!\n", len(allGames), duration)
@@ -100,25 +116,18 @@ func fullSetup(requestId string, username string, state *types.ServerState) {
 	insertStart := time.Now()
 	insertStats, err := model.InsertUserData(db, requestId, username, allGames, archives)
 	if err != nil {
-		fmt.Println("Critical failure occurred while inserting into db:", err.Error())
-		state.SetupStatuses.Mu.Lock()
-		defer state.SetupStatuses.Mu.Unlock()
-		(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusFailed
+		handleSetupError(requestId, fmt.Errorf("error inserting user data: %w", err), &state.SetupStatuses)
 		return
 	}
 
 	duration = time.Since(insertStart)
 	fmt.Printf("Inserted user data in %v\n", duration)
-	fmt.Printf("  %d games inserted\n", insertStats.NumGamesInserted)
-	fmt.Printf("  %d games failed to insert\n", insertStats.NumGameInsertErrors)
-	fmt.Printf("  %d positions inserted\n", insertStats.NumPositionsInserted)
-	fmt.Printf("  %d positions failed to insert\n", insertStats.NumPositionInsertErrors)
-
+	printInsertStats(insertStats)
 	fmt.Printf("Downloaded and saved user data in %v\n", time.Since(setupStart))
 
 	state.SetupStatuses.Mu.Lock()
 	defer state.SetupStatuses.Mu.Unlock()
-	(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusPending
+	(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusComplete
 }
 
 func updateExistingUser(requestId string, username string, state *types.ServerState) {
@@ -129,28 +138,49 @@ func updateExistingUser(requestId string, username string, state *types.ServerSt
 	db.Mu.Lock()
 	defer db.Mu.Unlock()
 
-	allArchives := model.ListArchives(username)
-	latestStoredArchive, _ := model.GetMostRecentArchive(requestId, db.Resource)
-	latestDate, _ := archiveToLogicalTimestamp(latestStoredArchive)
+	allArchives, err := model.ListArchives(username)
+	if err != nil {
+		handleSetupError(requestId, fmt.Errorf("error listing archives: %w", err), &state.SetupStatuses)
+		return
+	}
+
+	latestStoredArchive, err := model.GetMostRecentArchive(requestId, db.Resource)
+	if err != nil {
+		handleSetupError(requestId, fmt.Errorf("error getting most recent archive: %w", err), &state.SetupStatuses)
+		return
+	}
+
+	latestDate, err := archiveToLogicalTimestamp(latestStoredArchive)
+	if err != nil {
+		handleSetupError(requestId, fmt.Errorf("error converting latest archive to date: %w", err), &state.SetupStatuses)
+		return
+	}
 
 	archivesToUpdate := []string{}
 	for _, archive := range allArchives {
-		date, _ := archiveToLogicalTimestamp(archive)
+		date, err := archiveToLogicalTimestamp(archive)
+		if err != nil {
+			handleSetupError(requestId, fmt.Errorf("error converting archive to date: %w", err), &state.SetupStatuses)
+			return
+		}
+
 		if date >= latestDate {
 			archivesToUpdate = append(archivesToUpdate, archive)
 		}
 	}
 
-	fmt.Println("latest archive", latestStoredArchive)
-	fmt.Println("archives to update", archivesToUpdate)
-
 	games := model.GetAllGames(archivesToUpdate)
 	insertStats, err := model.InsertUserData(db.Resource, requestId, username, games, archivesToUpdate)
 	if err != nil {
-		fmt.Println("Error updating user data:", err.Error())
+		err = fmt.Errorf("error inserting user data: %w", err)
+		handleSetupError(requestId, err, &state.SetupStatuses)
+		return
 	}
 
-	fmt.Println(insertStats)
+	printInsertStats(insertStats)
+	state.SetupStatuses.Mu.Lock()
+	defer state.SetupStatuses.Mu.Unlock()
+	(*state.SetupStatuses.Resource)[requestId] = types.SetupStatusComplete
 }
 
 func Setup(w http.ResponseWriter, req *http.Request, state *types.ServerState) {

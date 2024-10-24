@@ -19,7 +19,7 @@ type InsertStatistics struct {
 	NumPositionInsertErrors int
 }
 
-func CreateTables(db *sql.DB) {
+func CreateTables(db *sql.DB) (err error) {
 	createGamesTable := `
 	CREATE TABLE IF NOT EXISTS games (
 		id TEXT PRIMARY KEY,
@@ -52,17 +52,16 @@ func CreateTables(db *sql.DB) {
 	`
 
 	if _, err := db.Exec(createGamesTable); err != nil {
-		fmt.Println("Error creating games table")
-		panic(err)
+		return fmt.Errorf("error creating games table: %w", err)
 	}
 	if _, err := db.Exec(createPositionsTable); err != nil {
-		fmt.Println("Error creating positions table")
-		panic(err)
+		return fmt.Errorf("error creating positions table: %w", err)
 	}
 	if _, err := db.Exec(createUsersTable); err != nil {
-		fmt.Println("Error creating users table")
-		panic(err)
+		return fmt.Errorf("error creating users table: %w", err)
 	}
+
+	return
 }
 
 func insertGame(tx *sql.Tx, gameStmt *sql.Stmt, fenStmt *sql.Stmt, game Game) (numPositionsInserted int, numPositionInsertErrors int, err error) {
@@ -219,7 +218,6 @@ func LoadExistingDbs(dbMap *types.DBMap) (userIds []string, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("error loading existing dbs: %w", err)
 		}
-		defer db.Close()
 
 		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 			return nil, fmt.Errorf("error enabling WAL: %w", err)
