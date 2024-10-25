@@ -7,7 +7,7 @@
     const lossStatsColors = ["#DE4B50", "#CF2D32", "#913135", "#6F2628"]
 </script>
 
-<BarChartGroup>
+<BarChartGroup header="Loss Results" labels={["Rapid", "Blitz", "Bullet"]}>
   <StackedBarChart 
     id="lossStatsRapidBar"
     data={[

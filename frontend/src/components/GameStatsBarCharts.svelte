@@ -7,7 +7,7 @@
     const gameStatsColors = ["#81b64c", "#cacac8", "#cf2d32"]
 </script>
 
-<BarChartGroup>
+<BarChartGroup header="Wins / Draws / Losses" labels={["Rapid", "Blitz", "Bullet"]}>
   <StackedBarChart 
     id="gameStatsRapidBar"
     data={[

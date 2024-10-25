@@ -47,5 +47,6 @@
     display: flex;
     width: 100%;
     gap: 30px;
+    flex-wrap: wrap;
   }
 </style>
